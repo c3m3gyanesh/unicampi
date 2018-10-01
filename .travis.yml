@@ -12,9 +12,8 @@ env:
 
 # command to install dependencies, e.g. pip install -r requirements.txt --use-mirrors
 install: 
-  - pip install tox
   - pip install -r requirements.txt
-  - pip install -r dev-requirements.txt
+  - pip install -r requirements-dev.txt
 
 # command to run tests, e.g. python setup.py test
 script: 
@@ -23,4 +22,5 @@ script:
 after_success:
   # Report coverage results to coveralls.io
   - pip install coveralls
+  - coverage run setup.py test
   - coveralls

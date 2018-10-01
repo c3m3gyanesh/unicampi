@@ -2,110 +2,155 @@
 
 """Views"""
 
-# Author: gabisurita -- <gabsurita@gmail.com>
-# License: GPL 3.0
+from . import UnicamPI
+from .core.views import BaseResource, ModelResource
+from .repositories import (InstitutesRepository,
+                           ActiveCoursesRepository, ActiveInstitutesRepository,
+                           LecturesRepository, EnrollmentsRepository)
 
 
-from cornice.resource import resource
-
-from unicampi import dac_parser
-
-ENDPOINTS = {
-    'Institutos': {
-        'collection_path': '/institutos',
-        'path': '/institutos/{sigla}',
-    },
-    'Disciplinas': {
-        'collection_path': '/institutos/{instituto}/disciplinas',
-        'path': '/disciplinas/{sigla}',
-    },
-    'Oferecimentos': {
-        'collection_path': '/periodos/{periodo}/oferecimentos/{sigla}',
-        'path': '/periodos/{periodo}/oferecimentos/{sigla}/{turma}',
-    },
-    'Matriculados': {
-        'path': '/periodos/{periodo}/oferecimentos/{sigla}/{turma}/'
-                'matriculados',
-    },
-}
-
-
-class ApiResource(object):
-    def __init__(self, request):
-        self.request = request
-
-
-@resource(path='/')
-class Hello(ApiResource):
-    def __init__(self, request):
-        self.request = request
+class Docs(BaseResource):
+    name = 'Documentação'
+    description = 'Mapa da UnicamPI.'
+    endpoint = '/'
 
     def get(self):
-        return {'path': ENDPOINTS}
+        return {
+            'api_version': UnicamPI.API_VERSION,
+            'map': sorted([r.describe(request=self.request) for r in
+                           UnicamPI.resources], key=lambda d: d['route'])
+        }
 
 
-@resource(**ENDPOINTS['Institutos'])
-class Institute(ApiResource):
-    def __init__(self, request):
-        super(Institute, self).__init__(request)
-        self.institute_list = dac_parser.get_institutes()
+class Institutes(ModelResource):
+    name = 'Institutos'
+    description = 'Recupera institutos da UNICAMP.'
+    collection_endpoint = '/institutos'
 
-    def collection_get(self):
-        return self.institute_list
+    route_parameters = {
+        'id': {
+            'preprocess': 'uppercase',
+            'examples': ['IC', 'feec', 'iFcH'],
+        },
+    }
 
-    def get(self):
-        institute = [inst for inst in self.institute_list
-                     if inst['sigla'].upper() == self.request.matchdict[
-                         'sigla'].upper()]
+    def repository(self):
+        institutes = InstitutesRepository()
 
-        if institute:
-            return institute[0]
-        else:
-            raise KeyError
+        return institutes
 
 
-@resource(**ENDPOINTS['Disciplinas'])
-class Subject(ApiResource):
-    def collection_get(self):
-        institute = self.request.matchdict['instituto'].upper()
-        return dac_parser.get_subjects(institute)
+class ActiveInstitutes(ModelResource):
+    name = 'Institutos ativos'
+    description = ('Recupera institutos da UNICAMP que oferecem disciplinas',
+                   ' em um periodo')
+    endpoint = '/institutos/{id}/periodos/{periodo}'
+    collection_endpoint = '/institutos/periodos/{periodo}'
 
-    def get(self):
-        name = self.request.matchdict['sigla'].upper()
-        return dac_parser.get_subject(name)
+    route_parameters = {
+        'periodo': {
+            'preprocess': 'split-year-term',
+            'examples': ['2015s1', '2014s2'],
+        },
+        'id': {
+            'preprocess': 'uppercase',
+            'examples': ['IC', 'feec', 'iFcH'],
+        },
+    }
 
+    def repository(self):
+        year, term = self.params['periodo']
+        institutes = ActiveInstitutesRepository(term=term)
 
-@resource(**ENDPOINTS['Oferecimentos'])
-class Offering(ApiResource):
-    def __init__(self, request):
-        self.request = request
-        self.periodo = request.matchdict['periodo'].lower()
-        self.ano, self.sem = self.periodo.split('s', 1)
-
-    def collection_get(self):
-        data = self.request.matchdict
-        return dac_parser.get_offerings(data['sigla'].upper(),
-                                        self.ano,
-                                        self.sem)
-
-    def get(self):
-        data = self.request.matchdict
-        self.offering = dac_parser.get_offering(data['sigla'].upper(),
-                                                data['turma'].upper(),
-                                                self.ano, self.sem)
-
-        self.enrollments = self.offering.pop('alunos', {})
-
-        return self.offering
+        return institutes
 
 
-@resource(**ENDPOINTS['Matriculados'])
-class Enrollments(Offering):
-    def __init__(self, request):
-        self.request = request
-        self.periodo = request.matchdict['periodo'].lower()
-        self.ano, self.sem = self.periodo.split('s', 1)
+class ActiveCourses(ModelResource):
+    name = 'Disciplinas ativas'
+    description = ('Disciplinas ativas em um periodo em'
+                   'determinado instituto na UNICAMP.')
 
-    def get(self):
-        super(Enrollments, self).get()
-        return self.enrollments
+    endpoint = '/disciplinas/{id}/periodos/{periodo}'
+    collection_endpoint = '/institutos/{instituto}/periodos/{periodo}/disciplinas'
+
+    route_parameters = {
+        'periodo': {
+            'preprocess': 'split-year-term',
+            'examples': ['2015s1', '2014s2'],
+        },
+        'id': {
+            'preprocess': 'uppercase',
+            'examples': ['MC102', 'mc878'],
+        },
+        'instituto': {
+            'preprocess': 'uppercase',
+            'examples': ['IC', 'feec', 'iFcH'],
+        },
+    }
+
+    def repository(self):
+        year, term = self.params['periodo']
+
+        courses = ActiveCoursesRepository().filter(term=term)
+
+        if 'instituto' in self.params:
+            courses = courses.filter(institute=self.params['instituto'])
+
+        return courses
+
+
+class Lectures(ModelResource):
+    name = 'Oferecimentos'
+    description = 'Turmas de uma determinada disciplina e período.'
+    collection_endpoint = ('/disciplinas/{disciplina}'
+                           '/periodos/{periodo}/turmas')
+
+    route_parameters = {
+        'periodo': {
+            'preprocess': 'split-year-term',
+            'examples': ['2015s1', '2014s2'],
+        },
+        'disciplina': {
+            'preprocess': 'uppercase',
+            'examples': ['MC102', 'mc878'],
+        },
+    }
+
+    def repository(self):
+        year, term = self.params['periodo']
+
+        return (LecturesRepository()
+                .filter(year=year, term=term,
+                        course=self.params['disciplina']))
+
+
+class Enrollments(ModelResource):
+    name = 'Matrículas'
+    description = 'Matrículas em uma turma.'
+
+    collection_endpoint = ('/disciplinas/{disciplina}'
+                           '/periodos/{periodo}'
+                           '/turmas/{turma}/matriculados')
+
+    route_parameters = {
+        'periodo': {
+            'preprocess': 'split-year-term',
+            'examples': ['2015s1', '2014s2'],
+        },
+        'disciplina': {
+            'preprocess': 'uppercase',
+            'examples': ['MC102', 'mc878'],
+        },
+        'turma': {
+            'preprocess': 'lowercase',
+            'examples': ['a', 'B']
+        },
+    }
+
+    def repository(self):
+        year, term = self.params['periodo']
+
+        return (EnrollmentsRepository()
+                .filter(year=year, term=term,
+                        course=self.params['disciplina'],
+                        lecture=self.params['turma']))
